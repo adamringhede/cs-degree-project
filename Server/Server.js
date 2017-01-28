@@ -152,6 +152,4 @@ Server.prototype.addToGroup = function (client, groupID) {
 		});
 	}
 };
-
-new Server();
-
+module.exports = Server
