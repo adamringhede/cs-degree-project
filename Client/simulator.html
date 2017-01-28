@@ -1,0 +1,346 @@
+<html>
+	<head>
+		<script src="Chart.min.js"></script>
+	</head>
+	<body>
+		<canvas id="myChart" width="600" height="300"></canvas>
+		<script src="./Client.js"></script>
+
+		<script type="text/javascript">
+
+
+			function simulateClientBehavior (group) {
+				if (!group.connected) return;
+				for(var i = 0; i < 1; i++) {
+					setTimeout(function () {
+						group.updateState(Math.ceil(15*Math.random()).toString(), { 
+							"someValue": Math.ceil(10000*Math.random().toString()) 
+						});
+					},  Math.floor(200 * Math.random()) * i );
+				}
+				
+			}
+
+			var k = 0,
+				serverConnections,
+				startedServers,
+				servers = [
+					{ host: "192.168.0.190", port: 7080 },
+					{ host: "192.168.0.189", port: 7080 },
+					{ host: "192.168.0.188", port: 7080 },
+					{ host: "192.168.0.185", port: 7080 }
+				];
+
+			// Simulation data
+			var numClientsInGroups = 0,
+				numRejoins = 0,
+				numFailuresToRejoinGroup = 0,
+				simulationsData = [],
+				numAffectedByFault = 0;
+
+
+			var clientConnections = [];
+			function spawnClientConnection () {
+				k++;
+				var num = k;
+				var connection = new GroupNet.Connection();
+				connection.setServers(servers).connect({
+					onSuccess: function () {
+						this.joinGroup({ 
+							onFoundGroup: function (group) {
+								numClientsInGroups++; // Collect simulation data
+								simulateClientBehavior(group);
+							}
+						});
+					},
+					onFailure: function () {
+
+					}
+				}).bind('rejoinedGroup', function (group) {
+					numRejoins++; // Collect simulation data
+				}).bind('rejoiningGroupFailed', function () {
+					numFailuresToRejoinGroup++;
+				}).bind('disconnectedFromGroup', function () {
+					numAffectedByFault++;
+				});
+				return connection;
+			}
+
+			function spawnClients (num, callback) {
+				clientConnections = [];
+				for (var i = 0; i < num; i++) {
+					setTimeout(function () {
+						clientConnections.push(spawnClientConnection());
+					}, 100*i);
+				}
+				setTimeout(callback, 100*num + 2500);
+			}
+
+			function connectToServers (callback) {
+				serverConnections = [];
+				var numConnections = 0;
+				for (var i = 0, l = servers.length; i < l; i++) {
+					var c = new WebSocket("ws://" + servers[i].host + ":7086");
+					c.onopen = function () {
+						numConnections++;
+						if (numConnections === servers.length) {
+							callback();
+						}
+					};
+					serverConnections.push(c);
+				}
+			}
+
+			function startSomeServers (numServers) {
+				console.log("Starting " + numServers + " servers");
+				startedServers = [];
+				for (var i = 0; i < numServers; i++) {
+					serverConnections[i].send(JSON.stringify({
+						name: "startServer",
+						data: {}
+					}));
+					startedServers.push(serverConnections[i]);
+				}
+			}
+
+			function killSomeServers (numServers) {
+				console.log("Killing " + numServers + " servers");
+				for (var i = 0; i < numServers; i++) {
+					var selectedServerIndex = Math.floor(Math.random() * startedServers.length);
+					startedServers[selectedServerIndex].send(JSON.stringify({
+						name: "stopServer",
+						data: {}
+					}));
+					startedServers.splice(selectedServerIndex, 1);
+				}
+			}
+			function killAllServers () {
+				for (var i = 0, l = clientConnections.length; i < l; i++) {
+					clientConnections[i].disconnect();
+				}
+				for (var i = 0, l = serverConnections.length; i < l; i++) {
+					serverConnections[i].send(JSON.stringify({
+						name: "stopServer",
+						data: {}
+					}));
+				}
+			}
+			
+			function startSimulations (numSim) {
+				var startTime = (new Date()).getTime();
+				connectToServers(function () {
+					repeatMultipleSimulations([
+						{start: 2, kill: 1},
+						{start: 3, kill: 1},
+						{start: 3, kill: 2},
+						{start: 4, kill: 1},
+						{start: 4, kill: 2},
+						{start: 4, kill: 3}
+					], numSim, function () { 
+						console.log("Simulations  complete");
+						console.log(simulationsData);
+						localStorage[(new Date()).toString()] = JSON.stringify(simulationsData);
+						console.log("Minutes to complete simulations: " + ((new Date()).getTime() - startTime) / 60000);
+					});
+				});
+			}
+			
+
+
+			function repeatMultipleSimulations (descriptions, times, callback) {
+				if (times > 0) {
+					runMultipleSimulations(descriptions, function () {
+						times -= 1;
+						console.log(times + " left until finished (" + times * 3 + " minutes)");
+						repeatMultipleSimulations(descriptions, times, callback);
+					});
+				} else {
+					callback();
+				}	
+			}
+
+			function runSimulation (numToStart, numToKill, callback) {
+				// INITIATE DATA STRUCTURES TO COLLECT SIMULATION DATA
+				numClientsInGroups = 0;
+				numRejoins = 0;
+				numFailuresToRejoinGroup = 0;
+				numAffectedByFault = 0;
+				killAllServers();
+				setTimeout(function(){
+					startSomeServers(numToStart);
+				}, 500);
+				
+
+				setTimeout(function () {
+					spawnClients(50 * numToStart, function () {
+						killSomeServers(numToKill);
+						setTimeout(function () {
+							simulationsData.push(JSON.stringify({
+								numClientsInGroups: numClientsInGroups,
+								numRejoins: numRejoins,
+								load: "high",
+								numServers: numToStart,
+								numFaults: numToKill,
+								numFailuresToRejoinGroup: numFailuresToRejoinGroup,
+								numAffectedByFault: numAffectedByFault
+							}));
+							killAllServers();
+						}, 3500); // The time given to clients to try to reconnect and for simulation data to be collected.
+						setTimeout(callback, 4600); 
+					});
+				}, 1000);
+
+			
+			}
+
+			function runMultipleSimulations (descriptions, callback, index) {
+				if (index === undefined) index = 0;
+				setTimeout(function () {
+					var d = descriptions[index];
+					runSimulation(d.start, d.kill, function () {
+						index++;
+						if (index < descriptions.length) {
+							runMultipleSimulations(descriptions, callback, index);
+						} else {
+							if (callback) callback();
+						}
+					});
+				}, 3000); // TIME BETWEEN SIMULATIONS
+				
+			}
+			
+			function logSimulationsData(load) {
+				var onetwo = [];
+				var onethree = [];
+				var twothree = [];
+				var onefour = [];
+				var twofour = [];
+				var threefour = [];
+				for (var c in localStorage) {
+					var data = JSON.parse(localStorage[c]);
+					for (var i = 0, l = data.length; i < l; i++) {
+						var test = JSON.parse(data[i]);
+						if(test.load === load) {
+							if (test.numServers === 2 && test.numFaults === 1 ){ onetwo.push([test.numRejoins / test.numAffectedByFault *100, test.numFailuresToRejoinGroup / test.numAffectedByFault *100] ); } else
+							if (test.numServers === 3 && test.numFaults === 1 ){ onethree.push([test.numRejoins / test.numAffectedByFault *100, test.numFailuresToRejoinGroup / test.numAffectedByFault *100] ); } else
+							if (test.numServers === 3 && test.numFaults === 2 ){ twothree.push([test.numRejoins / test.numAffectedByFault *100, test.numFailuresToRejoinGroup / test.numAffectedByFault *100] ); } else
+							if (test.numServers === 4 && test.numFaults === 1 ){ onefour.push([test.numRejoins / test.numAffectedByFault *100, test.numFailuresToRejoinGroup / test.numAffectedByFault *100] ); } else
+							if (test.numServers === 4 && test.numFaults === 2 ){ twofour.push([test.numRejoins / test.numAffectedByFault *100, test.numFailuresToRejoinGroup / test.numAffectedByFault *100] ); } else
+							if (test.numServers === 4 && test.numFaults === 3 ){ threefour.push([test.numRejoins / test.numAffectedByFault *100, test.numFailuresToRejoinGroup / test.numAffectedByFault *100] ); }
+						}
+					}
+				};
+				
+
+				function avg (numbers) {
+					var sum = 0;
+					var divideBy = numbers.length;
+					for (var i = 0, l = numbers.length; i < l; i++) {
+						if(isNaN(sum+numbers[i][0])){
+							divideBy = i;
+							break;
+						} 
+						sum += numbers[i][0];
+					}
+					return Math.round(sum/divideBy);
+				}
+				function avg2 (numbers) {
+					var sum = 0;
+					var divideBy = numbers.length;
+					for (var i = 0, l = numbers.length; i < l; i++) {
+						if(isNaN(sum+numbers[i][1])){
+							divideBy = i;
+							break;
+						} 
+						sum += numbers[i][1];
+					}
+					return Math.round(sum/divideBy);
+				}
+
+				function distribution (arr) {
+					var dist = [0,0,0,0,0,0,0,0,0,0];
+					for (var i = 0, l = arr.length; i < l; i++) {
+						var v = Math.floor(arr[i][0] / 10);
+						dist[v < 10 ? v : 9] += 1;
+					}
+					return dist;
+				}
+
+				function max (arr) {
+					var max = 0;
+					for ( var i = 0; i < arr.length; i++) {
+						if (arr[i][0] > max) {
+							max = arr[i][0];
+						}
+					}
+					return Math.round(max);
+				}
+				function min (arr) {
+					var min = 101;
+					for ( var i = 0; i < arr.length; i++) {
+						if (arr[i][0] < min) {
+							min = arr[i][0];
+						}
+					}
+					return Math.round(min);
+				}
+
+
+				console.log("Frequency : : : : : : : : ");
+				console.log(distribution(onetwo));
+				console.log(distribution(onethree));
+				console.log(distribution(onefour));
+				console.log(distribution(twothree));
+				console.log(distribution(twofour));
+				console.log(distribution(threefour));
+
+				console.log("Min and Max : : : : : : : ");
+				console.log("1/2 :" + min(onetwo) + " : " + max(onetwo));
+				console.log("1/3 :" + min(onethree) + " : " + max(onethree));
+				console.log("1/4 :" + min(onefour) + " : " + max(onefour));
+				console.log("2/3 :" + min(twothree) + " : " + max(twothree));
+				console.log("2/4 :" + min(twofour) + " : " + max(twofour));
+				console.log("3/4 :" + min(threefour) + " : " + max(threefour));
+				
+				console.log("AVERAGES : : : : : : : : : ");
+				console.log([avg(onetwo),avg(onethree),avg(onefour),avg(twothree),avg(twofour),avg(threefour)]);
+				console.log("AVERAGE FAILURES : : : : : : : : : ");
+				console.log([avg2(onetwo),avg2(onethree),avg2(onefour),avg2(twothree),avg2(twofour),avg2(threefour)]);
+
+			}
+			
+			//logSimulationsData("low");
+			function getZero () {
+				var num = 0;
+				var tot = 0;
+				for (var c in localStorage) {
+					var data = JSON.parse(localStorage[c]);
+					for (var i = 0, l = data.length; i < l; i++) {
+						var test = JSON.parse(data[i]);
+						if(test.load === "veryHigh") continue;
+							tot++;
+							if (test.numRejoins / test.numAffectedByFault === 0) num++;
+					}
+				}
+				console.log("Zeros: " + num/tot);
+			}
+
+			function getTable () {
+				var html = "<table><tr> <th>Faults</th>  <th>Cluster Size</th> <th>Load</th> <th>Affected</th>  <th>Clients re-joining group</th>  <th>Clients in Groups</th> <th>Failure after redirect</th> </tr>";
+				for (var c in localStorage) {
+					var data = JSON.parse(localStorage[c]);
+					for (var i = 0, l = data.length; i < l; i++) {
+
+						var test = JSON.parse(data[i]);
+						if(test.load === "veryHigh") continue;
+						html += "<tr> <td>" + test.numFaults +"</td>  <td>" + test.numServers + "</td> <td>" + test.load + "</td> <td>"+ test.numAffectedByFault +"</td>  <td>"+test.numRejoins+"</td>  <td>"+test.numClientsInGroups+"</td> <td>"+test.numFailuresToRejoinGroup+"</td> </tr>"
+					}
+				};
+				html += "</table>";
+				document.getElementById("puttablehere").value = html;
+			}
+		</script>
+
+		<textarea rows="10" cols="30" id="puttablehere"></textarea>
+	</body>
+</html>

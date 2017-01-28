@@ -1,0 +1,58 @@
+<html>
+	<head>
+	</head>
+	<body>
+
+		<script src="./Client.js"></script>
+
+		<script type="text/javascript">
+
+			function joinedGroup (group) {
+				console.log(group);
+				group.updateState("values", {a: Math.ceil(10*Math.random()) });
+			}
+
+			var connection = new GroupNet.Connection();
+			connection.setServers([
+				{ host: "192.168.0.190", port: 7080 },
+				{ host: "192.168.0.189", port: 7080 },
+				{ host: "192.168.0.188", port: 7080 }
+			]).connect({
+				host: "192.168.0.190",
+				port: 7080,
+				onSuccess: function () {
+					this.joinGroup({ onFoundGroup: joinedGroup });
+				},
+				onFailure: function () {
+					console.log("Could not connect");
+				}
+			}).bind('rejoinedGroup', function (group) {
+				console.log("Rejoined group with id: " + group.id);
+			}).bind('findGroupErrorFindGroup', function () {
+				console.log("Could not find group on server");
+			});
+
+			var connection2 = new GroupNet.Connection();
+			connection2.setServers([
+				{ host: "192.168.0.190", port: 7080 },
+				{ host: "192.168.0.189", port: 7080 },
+				{ host: "192.168.0.188", port: 7080 }
+			]).connect({
+				host: "192.168.0.190",
+				port: 7080,
+				onSuccess: function () {
+					this.joinGroup({ onFoundGroup: joinedGroup });
+				},
+				onFailure: function () {
+					console.log("Could not connect");
+				}
+			}).bind('rejoinedGroup', function (group) {
+				console.log("Rejoined group with id: " + group.id);
+			}).bind('findGroupErrorFindGroup', function () {
+				console.log("Could not find group on server");
+			});
+
+		</script>
+
+	</body>
+</html>
